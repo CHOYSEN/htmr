@@ -126,6 +126,51 @@ const attributePropMap: Record<string, string | string[]> = {
   itemtype: 'itemType',
 };
 
+const elementMap = new Map<HTMLTags, HTMLElement>();
+function getElement(tagName: HTMLTags) {
+  if (!elementMap.has(tagName))
+    elementMap.set(tagName, document.createElement(tagName));
+  return elementMap.get(tagName)!;
+}
+
+const propertyMap = new Map<
+  HTMLElement,
+  { lowerCaseProps: Set<string>; standardProps: Map<string, string> }
+>();
+function hasProperty(el: HTMLElement, attributeName: string) {
+  if (!propertyMap.has(el)) {
+    const lowerCaseProps = new Set<string>();
+    const standardProps = new Map<string, string>();
+    for (let propName in el) {
+      const lowerCase = propName.toLowerCase();
+      lowerCaseProps.add(lowerCase);
+      standardProps.set(lowerCase, propName);
+    }
+    propertyMap.set(el, { lowerCaseProps, standardProps });
+  }
+  const lowerCaseAttr = attributeName.toLocaleLowerCase();
+  const { lowerCaseProps, standardProps } = propertyMap.get(el)!;
+  const has = lowerCaseProps.has(lowerCaseAttr);
+  return { has, standardName: standardProps.get(lowerCaseAttr) };
+}
+
+// some attribute can't be checked whether it's a boolean attribute
+// or not by using setAttribute trick
+const SPECIAL_BOOLEAN_ATTRIBUTES: string[] = ['itemScope'];
+const booleanAttributeMap = new Map<string, boolean>();
+function isBooleanAttribute(el: HTMLElement, attributeName: string) {
+  const key = `${el.tagName}-${attributeName}`;
+  if (!booleanAttributeMap.has(key)) {
+    el.setAttribute(attributeName, '');
+    const isBoolean =
+      // @ts-ignore
+      el[attributeName] === true ||
+      SPECIAL_BOOLEAN_ATTRIBUTES.indexOf(attributeName) > -1;
+    booleanAttributeMap.set(key, isBoolean);
+  }
+  return booleanAttributeMap.get(key)!;
+}
+
 /**
  * In browser we can get equivalent React props by creating a temporary DOM node,
  * and iterating over its properties. This means we don't have to ship entire
@@ -135,7 +180,7 @@ const attributePropMap: Record<string, string | string[]> = {
  */
 function getPropInfo(tagName: HTMLTags, attributeName: string) {
   const propName = attributePropMap[attributeName];
-  const el = document.createElement(tagName);
+  const el = getElement(tagName);
 
   // handle edge cases first
   if (propName) {
@@ -143,30 +188,22 @@ function getPropInfo(tagName: HTMLTags, attributeName: string) {
     const domProp = Array.isArray(propName)
       ? propName[1] || attributeName
       : propName;
-    return { name: reactProp, isBoolean: checkBooleanAttribute(el, domProp) };
+    return { name: reactProp, isBoolean: isBooleanAttribute(el, domProp) };
   }
 
-  for (let propName in el) {
-    if (propName.toLowerCase() === attributeName.toLowerCase()) {
-      return { name: propName, isBoolean: checkBooleanAttribute(el, propName) };
-    }
+  const { has, standardName } = hasProperty(el, attributeName);
+  if (has) {
+    return {
+      name: standardName!,
+      isBoolean: isBooleanAttribute(el, standardName!),
+    };
   }
 
   return {
     name: attributeName,
-    isBoolean: checkBooleanAttribute(el, attributeName),
+    isBoolean: isBooleanAttribute(el, attributeName),
   };
 }
-
-function checkBooleanAttribute(el: HTMLElement, prop: any) {
-  el.setAttribute(prop, '');
-  // @ts-ignore
-  return el[prop] === true || SPECIAL_BOOLEAN_ATTRIBUTES.indexOf(prop) > -1;
-}
-
-// some attribute can't be checked whether it's a boolean attribute
-// or not by using setAttribute trick
-const SPECIAL_BOOLEAN_ATTRIBUTES: string[] = ['itemScope'];
 
 function reactCreateElement(
   tag: HTMLTags,
